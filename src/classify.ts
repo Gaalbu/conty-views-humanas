@@ -13,6 +13,29 @@ export const SPIKE_NEIGHBOR_MAX_SHARE = 0.2;
 export const NEAR_PEAK_SHARE = 0.4;
 export const SUSTAINED_MIN_HOURS = 3;
 export const WEAK_SPIKE_MIN_RATIO = 5;
+export const MAX_POINTS = 2160; // 90 dias de buckets horários
+const HOUR_MS = 60 * 60 * 1000;
+
+// Maior trecho de horas consecutivas. Lacuna não é medição: seis observações
+// espalhadas por dez dias não são "seis horas seguidas", e o vizinho de um pico
+// só conta se for a hora ao lado. Em empate de tamanho, fica o trecho mais recente.
+function longestContiguous(points: Point[]): Point[] {
+  let best: Point[] = [];
+  let start = 0;
+  for (let i = 1; i <= points.length; i += 1) {
+    const contiguous = i < points.length && Date.parse(points[i]!.hour) - Date.parse(points[i - 1]!.hour) === HOUR_MS;
+    if (contiguous) continue;
+    if (i - start >= best.length) best = points.slice(start, i);
+    start = i;
+  }
+  return best;
+}
+
+function maxOf(values: number[]): number {
+  let max = -Infinity;
+  for (const value of values) if (value > max) max = value;
+  return max;
+}
 
 function median(values: number[]): number {
   if (values.length === 0) return 0;
@@ -39,20 +62,67 @@ function fmt(n: number): string {
   return Number.isFinite(n) ? String(Math.round(n * 10) / 10) : "infinito";
 }
 
+// Forma do pico: quantas vezes a mediana das outras horas, se os vizinhos ficam
+// baixos e quantas horas chegam perto do topo. Regras 3 a 5 leem daqui.
+function analyzePeak(views: number[]) {
+  const peak = maxOf(views);
+  const peakIndex = views.indexOf(peak);
+  const othersMedian = median(views.filter((_, i) => i !== peakIndex));
+  const ratio = othersMedian > 0 ? peak / othersMedian : peak > 0 ? Infinity : 0;
+  const neighbors = [views[peakIndex - 1], views[peakIndex + 1]].filter((v): v is number => v !== undefined);
+  const neighborsLow = peak > 0 && neighbors.every((v) => v <= peak * SPIKE_NEIGHBOR_MAX_SHARE);
+  const nearPeakHours = peak > 0 ? views.filter((v) => v >= peak * NEAR_PEAK_SHARE).length : 0;
+  const isolatedShape = neighborsLow && nearPeakHours < SUSTAINED_MIN_HOURS;
+  const strongSpike = isolatedShape && peak >= SPIKE_MIN_VIEWS && ratio >= SPIKE_MIN_RATIO;
+  const weakSpike = isolatedShape && !strongSpike && ratio >= WEAK_SPIKE_MIN_RATIO;
+  const sustained = peak > 0 && nearPeakHours >= SUSTAINED_MIN_HOURS;
+  return { peak, peakIndex, othersMedian, ratio, nearPeakHours, strongSpike, weakSpike, sustained };
+}
+
+// Regra 1 e lacunas: devolve o veredito inconclusivo direto, ou o maior trecho
+// de horas consecutivas que dá para analisar.
+function analyzableSegment(input: Point[]): { verdict: Verdict } | { points: Point[]; gapSignal: Signal } {
+  const sorted = [...input].sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
+
+  if (sorted.length < MIN_POINTS) {
+    return {
+      verdict: {
+        classification: "inconclusive",
+        reason: `Amostra curta: ${sorted.length} horas, o mínimo é ${MIN_POINTS}. Com tão pouco dado não dá para acusar compra de views.`,
+        signals: [{ name: "short_sample", fired: true, detail: `${sorted.length} de ${MIN_POINTS} horas` }],
+      },
+    };
+  }
+
+  const points = longestContiguous(sorted);
+  const gapSignal: Signal = {
+    name: "gaps",
+    fired: points.length < sorted.length,
+    detail:
+      points.length < sorted.length
+        ? `${sorted.length} pontos, maior trecho de horas consecutivas com ${points.length}; só ele foi analisado`
+        : "todas as horas são consecutivas",
+  };
+  if (points.length < MIN_POINTS) {
+    return {
+      verdict: {
+        classification: "inconclusive",
+        reason: `A série tem lacunas: o maior trecho de horas consecutivas tem ${points.length} horas, o mínimo é ${MIN_POINTS}. Pontos espaçados não mostram sequência nem pico, então não dá para acusar.`,
+        signals: [gapSignal],
+      },
+    };
+  }
+  return { points, gapSignal };
+}
+
 // Classificação explicável, sem modelo opaco. As regras rodam nesta ordem:
 // amostra curta, repetição mecânica, pico isolado, pico fraco, sustentação.
 // Na dúvida, não acusa: falso positivo pune criador cujo vídeo estourou de verdade.
 export function classify(input: Point[]): Verdict {
-  const points = [...input].sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
+  const segment = analyzableSegment(input);
+  if ("verdict" in segment) return segment.verdict;
+  const { points, gapSignal } = segment;
   const views = points.map((p) => p.views);
-
-  if (points.length < MIN_POINTS) {
-    return {
-      classification: "inconclusive",
-      reason: `Amostra curta: ${points.length} horas, o mínimo é ${MIN_POINTS}. Com tão pouco dado não dá para acusar compra de views.`,
-      signals: [{ name: "short_sample", fired: true, detail: `${points.length} de ${MIN_POINTS} horas` }],
-    };
-  }
 
   const repeat = longestRepeat(views);
   const mechanical: Signal = {
@@ -64,19 +134,7 @@ export function classify(input: Point[]): Verdict {
         : `nenhuma sequência de ${REPEAT_HOURS} horas iguais com ${REPEAT_MIN_VIEWS} views ou mais`,
   };
 
-  const peak = Math.max(...views);
-  const peakIndex = views.indexOf(peak);
-  const others = views.filter((_, i) => i !== peakIndex);
-  const othersMedian = median(others);
-  const ratio = othersMedian > 0 ? peak / othersMedian : peak > 0 ? Infinity : 0;
-  const neighbors = [views[peakIndex - 1], views[peakIndex + 1]].filter((v): v is number => v !== undefined);
-  const neighborsLow = peak > 0 && neighbors.every((v) => v <= peak * SPIKE_NEIGHBOR_MAX_SHARE);
-  const nearPeakHours = peak > 0 ? views.filter((v) => v >= peak * NEAR_PEAK_SHARE).length : 0;
-  const isolatedShape = neighborsLow && nearPeakHours < SUSTAINED_MIN_HOURS;
-  const strongSpike = isolatedShape && peak >= SPIKE_MIN_VIEWS && ratio >= SPIKE_MIN_RATIO;
-  const weakSpike = isolatedShape && !strongSpike && ratio >= WEAK_SPIKE_MIN_RATIO;
-  const sustained = peak > 0 && nearPeakHours >= SUSTAINED_MIN_HOURS;
-
+  const { peak, peakIndex, othersMedian, ratio, nearPeakHours, strongSpike, weakSpike, sustained } = analyzePeak(views);
   const spikeDetail = `pico de ${peak} views em ${points[peakIndex]!.hour}, ${fmt(ratio)}x a mediana das outras horas (${fmt(othersMedian)}), ${nearPeakHours} hora(s) com 40% do pico ou mais`;
   const isolated: Signal = { name: "isolated_spike", fired: strongSpike, detail: spikeDetail };
   const weak: Signal = {
@@ -89,7 +147,9 @@ export function classify(input: Point[]): Verdict {
     fired: sustained,
     detail: `${nearPeakHours} hora(s) com 40% do pico ou mais; sustentação pede ${SUSTAINED_MIN_HOURS}`,
   };
-  const signals = [mechanical, isolated, weak, sustainedSignal];
+  const signals = gapSignal.fired
+    ? [mechanical, isolated, weak, sustainedSignal, gapSignal]
+    : [mechanical, isolated, weak, sustainedSignal];
 
   if (mechanical.fired) {
     return {
@@ -128,18 +188,23 @@ export function classify(input: Point[]): Verdict {
 
 export type ParsedPoints = { points: Point[] } | { error: string };
 
+// Contrato da API: buckets de hora cheia (minuto, segundo e milissegundo zero,
+// em qualquer offset), sem hora repetida, views inteiro seguro >= 0, no máximo
+// MAX_POINTS pontos.
 export function parsePoints(value: unknown): ParsedPoints {
   if (!Array.isArray(value)) return { error: "points deve ser uma lista" };
+  if (value.length > MAX_POINTS) return { error: `no máximo ${MAX_POINTS} horas por série` };
   const points: Point[] = [];
   const seen = new Set<number>();
   for (const item of value) {
     const hour = (item as { hour?: unknown })?.hour;
     const views = (item as { views?: unknown })?.views;
     if (typeof hour !== "string" || Number.isNaN(Date.parse(hour))) return { error: "hour inválida" };
-    if (typeof views !== "number" || !Number.isInteger(views) || views < 0) {
-      return { error: "views deve ser inteiro maior ou igual a 0" };
+    if (typeof views !== "number" || !Number.isSafeInteger(views) || views < 0) {
+      return { error: "views deve ser inteiro seguro maior ou igual a 0" };
     }
     const at = Date.parse(hour);
+    if (at % HOUR_MS !== 0) return { error: `hour precisa ser uma hora cheia: ${hour}` };
     if (seen.has(at)) return { error: `hora repetida: ${hour}` };
     seen.add(at);
     points.push({ hour: new Date(at).toISOString(), views });
