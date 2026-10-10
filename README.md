@@ -25,7 +25,7 @@ Pico orgânico sustentado (regra 5) e pico de uma hora (regra 3) nunca caem na m
 
 ## Como rodar
 
-Node 22 ou maior.
+Node 22.13 ou maior (primeira versão com `node:sqlite` sem flag).
 
 ```bash
 npm install
