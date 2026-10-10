@@ -13,6 +13,7 @@ export const SPIKE_NEIGHBOR_MAX_SHARE = 0.2;
 export const NEAR_PEAK_SHARE = 0.4;
 export const SUSTAINED_MIN_HOURS = 3;
 export const WEAK_SPIKE_MIN_RATIO = 5;
+export const MAX_POINTS = 2160; // 90 dias de buckets horários
 const HOUR_MS = 60 * 60 * 1000;
 
 // Maior trecho de horas consecutivas. Lacuna não é medição: seis observações
@@ -30,6 +31,11 @@ function longestContiguous(points: Point[]): Point[] {
   return best;
 }
 
+function maxOf(values: number[]): number {
+  let max = -Infinity;
+  for (const value of values) if (value > max) max = value;
+  return max;
+}
 
 function median(values: number[]): number {
   if (values.length === 0) return 0;
@@ -98,7 +104,7 @@ export function classify(input: Point[]): Verdict {
         : `nenhuma sequência de ${REPEAT_HOURS} horas iguais com ${REPEAT_MIN_VIEWS} views ou mais`,
   };
 
-  const peak = Math.max(...views);
+  const peak = maxOf(views);
   const peakIndex = views.indexOf(peak);
   const others = views.filter((_, i) => i !== peakIndex);
   const othersMedian = median(others);
@@ -165,17 +171,19 @@ export function classify(input: Point[]): Verdict {
 export type ParsedPoints = { points: Point[] } | { error: string };
 
 // Contrato da API: buckets de hora cheia (minuto, segundo e milissegundo zero,
-// em qualquer offset), sem hora repetida e views inteiro >= 0.
+// em qualquer offset), sem hora repetida, views inteiro seguro >= 0, no máximo
+// MAX_POINTS pontos.
 export function parsePoints(value: unknown): ParsedPoints {
   if (!Array.isArray(value)) return { error: "points deve ser uma lista" };
+  if (value.length > MAX_POINTS) return { error: `no máximo ${MAX_POINTS} horas por série` };
   const points: Point[] = [];
   const seen = new Set<number>();
   for (const item of value) {
     const hour = (item as { hour?: unknown })?.hour;
     const views = (item as { views?: unknown })?.views;
     if (typeof hour !== "string" || Number.isNaN(Date.parse(hour))) return { error: "hour inválida" };
-    if (typeof views !== "number" || !Number.isInteger(views) || views < 0) {
-      return { error: "views deve ser inteiro maior ou igual a 0" };
+    if (typeof views !== "number" || !Number.isSafeInteger(views) || views < 0) {
+      return { error: "views deve ser inteiro seguro maior ou igual a 0" };
     }
     const at = Date.parse(hour);
     if (at % HOUR_MS !== 0) return { error: `hour precisa ser uma hora cheia: ${hour}` };
