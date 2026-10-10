@@ -13,6 +13,23 @@ export const SPIKE_NEIGHBOR_MAX_SHARE = 0.2;
 export const NEAR_PEAK_SHARE = 0.4;
 export const SUSTAINED_MIN_HOURS = 3;
 export const WEAK_SPIKE_MIN_RATIO = 5;
+const HOUR_MS = 60 * 60 * 1000;
+
+// Maior trecho de horas consecutivas. Lacuna não é medição: seis observações
+// espalhadas por dez dias não são "seis horas seguidas", e o vizinho de um pico
+// só conta se for a hora ao lado. Em empate de tamanho, fica o trecho mais recente.
+function longestContiguous(points: Point[]): Point[] {
+  let best: Point[] = [];
+  let start = 0;
+  for (let i = 1; i <= points.length; i += 1) {
+    const contiguous = i < points.length && Date.parse(points[i]!.hour) - Date.parse(points[i - 1]!.hour) === HOUR_MS;
+    if (contiguous) continue;
+    if (i - start >= best.length) best = points.slice(start, i);
+    start = i;
+  }
+  return best;
+}
+
 
 function median(values: number[]): number {
   if (values.length === 0) return 0;
@@ -43,16 +60,33 @@ function fmt(n: number): string {
 // amostra curta, repetição mecânica, pico isolado, pico fraco, sustentação.
 // Na dúvida, não acusa: falso positivo pune criador cujo vídeo estourou de verdade.
 export function classify(input: Point[]): Verdict {
-  const points = [...input].sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
-  const views = points.map((p) => p.views);
+  const sorted = [...input].sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
 
+  if (sorted.length < MIN_POINTS) {
+    return {
+      classification: "inconclusive",
+      reason: `Amostra curta: ${sorted.length} horas, o mínimo é ${MIN_POINTS}. Com tão pouco dado não dá para acusar compra de views.`,
+      signals: [{ name: "short_sample", fired: true, detail: `${sorted.length} de ${MIN_POINTS} horas` }],
+    };
+  }
+
+  const points = longestContiguous(sorted);
+  const gapSignal: Signal = {
+    name: "gaps",
+    fired: points.length < sorted.length,
+    detail:
+      points.length < sorted.length
+        ? `${sorted.length} pontos, maior trecho de horas consecutivas com ${points.length}; só ele foi analisado`
+        : "todas as horas são consecutivas",
+  };
   if (points.length < MIN_POINTS) {
     return {
       classification: "inconclusive",
-      reason: `Amostra curta: ${points.length} horas, o mínimo é ${MIN_POINTS}. Com tão pouco dado não dá para acusar compra de views.`,
-      signals: [{ name: "short_sample", fired: true, detail: `${points.length} de ${MIN_POINTS} horas` }],
+      reason: `A série tem lacunas: o maior trecho de horas consecutivas tem ${points.length} horas, o mínimo é ${MIN_POINTS}. Pontos espaçados não mostram sequência nem pico, então não dá para acusar.`,
+      signals: [gapSignal],
     };
   }
+  const views = points.map((p) => p.views);
 
   const repeat = longestRepeat(views);
   const mechanical: Signal = {
@@ -89,7 +123,9 @@ export function classify(input: Point[]): Verdict {
     fired: sustained,
     detail: `${nearPeakHours} hora(s) com 40% do pico ou mais; sustentação pede ${SUSTAINED_MIN_HOURS}`,
   };
-  const signals = [mechanical, isolated, weak, sustainedSignal];
+  const signals = gapSignal.fired
+    ? [mechanical, isolated, weak, sustainedSignal, gapSignal]
+    : [mechanical, isolated, weak, sustainedSignal];
 
   if (mechanical.fired) {
     return {
@@ -128,6 +164,8 @@ export function classify(input: Point[]): Verdict {
 
 export type ParsedPoints = { points: Point[] } | { error: string };
 
+// Contrato da API: buckets de hora cheia (minuto, segundo e milissegundo zero,
+// em qualquer offset), sem hora repetida e views inteiro >= 0.
 export function parsePoints(value: unknown): ParsedPoints {
   if (!Array.isArray(value)) return { error: "points deve ser uma lista" };
   const points: Point[] = [];
@@ -140,6 +178,7 @@ export function parsePoints(value: unknown): ParsedPoints {
       return { error: "views deve ser inteiro maior ou igual a 0" };
     }
     const at = Date.parse(hour);
+    if (at % HOUR_MS !== 0) return { error: `hour precisa ser uma hora cheia: ${hour}` };
     if (seen.has(at)) return { error: `hora repetida: ${hour}` };
     seen.add(at);
     points.push({ hour: new Date(at).toISOString(), views });
