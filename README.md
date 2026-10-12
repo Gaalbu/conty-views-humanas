@@ -10,12 +10,14 @@ Comece a leitura por [`src/classify.ts`](src/classify.ts) e pela saída de `npm 
 
 1. Menos de 12 pontos → `inconclusive`: a amostra é curta e não acusa. Se a série tem lacunas, só o maior trecho de horas consecutivas é analisado (sinal `gaps`); com menos de 12 horas seguidas, `inconclusive`. Seis observações espalhadas por dez dias não são "seis horas seguidas".
 2. 6 horas seguidas ou mais com o mesmo inteiro, e esse inteiro `>= 300` → `suspicious`, sinal `mechanical_repeat`.
-3. Pico isolado: máximo `>= 1000`, máximo `>= 20` vezes a mediana das outras horas, cada vizinho `<= 20%` do pico, e menos de 3 horas com `>= 40%` do pico → `suspicious`, sinal `isolated_spike`.
-4. Pico isolado que não passa o limiar do item 3, mas com máximo `>= 5` vezes a mediana → `inconclusive`: abaixo do limiar de compra, prefere não acusar.
-5. 3 horas ou mais com `>= 40%` do pico, sem repetição mecânica → `legitimate`: o pico se sustenta.
-6. Nenhum sinal → `legitimate`: não há repetição mecânica nem pico comprado.
+3. Se o pico isolado (regra 4 ou 5) é a última hora da série → `inconclusive`: sem a hora seguinte não dá para ver se ele some, como compra, ou se sustenta, como um vídeo estourando.
+4. Pico isolado: máximo `>= 1000`, máximo `>= 20` vezes a mediana das outras horas, cada vizinho `<= 20%` do pico, e menos de 3 horas com `>= 40%` do pico → `suspicious`, sinal `isolated_spike`.
+5. Pico isolado que não passa o limiar do item 4, mas com máximo `>= 5` vezes a mediana → `inconclusive`: abaixo do limiar de compra, prefere não acusar.
+6. Queda abrupta: 3 horas seguidas acima de 3 vezes a mediana e de 200 views que caem para 20% ou menos de uma hora para a outra → `inconclusive`, sinal `abrupt_drop`. Público humano esfria aos poucos, mas o fim de uma live também corta assim; junto com repetição mecânica a série já é `suspicious` pela regra 2.
+7. 3 horas ou mais com `>= 40%` do pico, sem repetição mecânica → `legitimate`: o pico se sustenta.
+8. Nenhum sinal → `legitimate`: não há repetição mecânica nem pico comprado.
 
-Pico orgânico sustentado (regra 5) e pico de uma hora (regra 3) nunca caem na mesma classe.
+Pico orgânico sustentado (regra 7) e pico de uma hora (regra 4) nunca caem na mesma classe. Cada limiar tem teste de fronteira (6 horas disparam, 5 não; 300 views sim, 299 não; 1000 sim, 999 não; 20 vezes a mediana sim, 19,9 não; vizinho em 20% sim, 21% não).
 
 **Contrato da entrada:** cada ponto é um bucket de hora cheia (minuto, segundo e milissegundo zero, em qualquer offset), sem hora repetida, com `views` inteiro seguro `>= 0`. No máximo 2160 horas (90 dias) por série → senão 400. Corpo acima de 256 KiB → 413, com ou sem `Content-Length`. O pico é calculado num laço, sem `Math.max(...views)`, que estoura a pilha em séries grandes.
 
@@ -94,7 +96,7 @@ Os três casos listados em "O que isto não pega", sazonalidade por dia da seman
 
 Comece por `src/classify.ts` e pela saída de `npm run dataset`. A classificação é uma sequência de regras legíveis, e cada resposta traz o motivo em português e os sinais que dispararam ou não. A escolha central é não punir vídeo que estourou: pico que se sustenta por 3 horas ou mais com 40% do topo é `legitimate`, pico de uma hora com 20 vezes a mediana e mais de 1000 views é `suspicious`, e o pico isolado que fica abaixo desse limiar volta `inconclusive` em vez de acusar. Amostra com menos de 12 horas também é `inconclusive`. A taxa de falso positivo do README não foi escrita à mão: é a linha que `npm run dataset` imprime sobre 220 séries geradas com semente 7, e um teste compara a linha com a taxa recalculada.
 
-Testes: `npm test` com 24 passando, `npm run typecheck` sem erro. O exemplo deste README é o request de um teste.
+Testes: `npm test` com 37 passando, `npm run typecheck` sem erro. O exemplo deste README é o request de um teste.
 
 Ficou de fora: compra lenta com decaimento orgânico, volume baixo e ruído sobre curva orgânica.
 
