@@ -128,7 +128,7 @@ Os três casos listados em "O que isto não pega", sazonalidade por dia da seman
 
 Comece por `src/classify.ts` e pela saída de `npm run dataset`. A classificação é uma sequência de regras legíveis, e cada resposta traz o motivo em português e os sinais que dispararam ou não. A escolha central é não punir vídeo que estourou: pico que se sustenta por 3 horas ou mais com 40% do topo é `legitimate`, pico de uma hora com 20 vezes a mediana e mais de 1000 views é `suspicious`, e o pico isolado que fica abaixo desse limiar volta `inconclusive` em vez de acusar. Amostra com menos de 12 horas também é `inconclusive`. A taxa de falso positivo do README não foi escrita à mão: é a linha que `npm run dataset` imprime sobre 300 séries geradas com semente 7, e um teste compara a linha com a taxa recalculada.
 
-Testes: `npm test` com 43 passando, `npm run typecheck` sem erro. O exemplo deste README é o request de um teste.
+Testes: `npm test` com 44 passando, `npm run typecheck` sem erro. O exemplo deste README é o request de um teste.
 
 Ficou de fora: compra lenta com decaimento orgânico, volume baixo e ruído sobre curva orgânica.
 

@@ -19,5 +19,7 @@ export function createApp() {
     },
   );
 
+  app.notFound((c) => c.json({ error: "rota não encontrada" }, 404));
+
   return app;
 }
