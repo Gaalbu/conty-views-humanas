@@ -13,6 +13,10 @@ export const SPIKE_NEIGHBOR_MAX_SHARE = 0.2;
 export const NEAR_PEAK_SHARE = 0.4;
 export const SUSTAINED_MIN_HOURS = 3;
 export const WEAK_SPIKE_MIN_RATIO = 5;
+export const DROP_PLATEAU_HOURS = 3;
+export const DROP_MIN_LEVEL = 200;
+export const DROP_LEVEL_RATIO = 3;
+export const DROP_MAX_SHARE = 0.2;
 export const MAX_POINTS = 2160; // 90 dias de buckets horários
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -115,6 +119,20 @@ function analyzableSegment(input: Point[]): { verdict: Verdict } | { points: Poi
   return { points, gapSignal };
 }
 
+// Queda abrupta: um patamar de horas altas (acima de 3x a mediana e de 200 views)
+// que despenca para 20% ou menos do patamar de uma hora para a outra. Público
+// humano esfria aos poucos; views compradas param de uma vez. Sozinha não acusa:
+// o fim de uma live também corta assim.
+function findAbruptDrop(views: number[]): { from: number; level: number; after: number } | null {
+  const level = Math.max(DROP_MIN_LEVEL, median(views) * DROP_LEVEL_RATIO);
+  for (let i = DROP_PLATEAU_HOURS; i < views.length; i += 1) {
+    const plateau = views.slice(i - DROP_PLATEAU_HOURS, i);
+    const low = plateau.reduce((min, v) => Math.min(min, v), Infinity);
+    if (low >= level && views[i]! <= low * DROP_MAX_SHARE) return { from: i, level: low, after: views[i]! };
+  }
+  return null;
+}
+
 // Classificação explicável, sem modelo opaco. As regras rodam nesta ordem:
 // amostra curta, repetição mecânica, pico isolado, pico fraco, sustentação.
 // Na dúvida, não acusa: falso positivo pune criador cujo vídeo estourou de verdade.
@@ -150,9 +168,17 @@ export function classify(input: Point[]): Verdict {
   // Pico na última hora não mostra a hora seguinte: não dá para saber se some
   // (compra) ou se sustenta (viral começando).
   const peakAtEnd = peakIndex === views.length - 1 && (strongSpike || weakSpike);
+  const drop = findAbruptDrop(views);
+  const dropSignal: Signal = {
+    name: "abrupt_drop",
+    fired: drop !== null,
+    detail: drop
+      ? `${DROP_PLATEAU_HOURS} horas com ${drop.level}+ views caem para ${drop.after} em ${points[drop.from]!.hour}`
+      : `nenhum patamar de ${DROP_PLATEAU_HOURS} horas que despenque para ${DROP_MAX_SHARE * 100}% de uma hora para a outra`,
+  };
   const signals = gapSignal.fired
-    ? [mechanical, isolated, weak, sustainedSignal, gapSignal]
-    : [mechanical, isolated, weak, sustainedSignal];
+    ? [mechanical, isolated, weak, sustainedSignal, dropSignal, gapSignal]
+    : [mechanical, isolated, weak, sustainedSignal, dropSignal];
 
   if (mechanical.fired) {
     return {
@@ -179,6 +205,13 @@ export function classify(input: Point[]): Verdict {
     return {
       classification: "inconclusive",
       reason: `Há um pico isolado (${fmt(ratio)} vezes a mediana), mas abaixo do limiar de compra (${SPIKE_MIN_VIEWS} views e ${SPIKE_MIN_RATIO} vezes a mediana). Prefiro não acusar.`,
+      signals,
+    };
+  }
+  if (drop) {
+    return {
+      classification: "inconclusive",
+      reason: `Queda abrupta: ${DROP_PLATEAU_HOURS} horas com ${drop.level} views ou mais caem para ${drop.after} de uma hora para a outra. Público humano esfria aos poucos, mas o fim de uma live também corta assim, então sozinha a queda não acusa.`,
       signals,
     };
   }

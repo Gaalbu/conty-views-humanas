@@ -56,3 +56,32 @@ describe("fronteiras dos limiares", () => {
     expect(classify(series([...flat, 2000, 41])).classification).toBe("suspicious");
   });
 });
+
+describe("queda abrupta", () => {
+  it("patamar alto que despenca numa hora dispara o sinal e fica inconclusivo sozinho", () => {
+    const verdict = classify(series([...base(10), 900, 950, 920, 910, 60, ...base(8)]));
+    expect(fired(verdict, "abrupt_drop")).toBe(true);
+    expect(verdict.classification).toBe("inconclusive");
+    expect(verdict.reason).toContain("Queda abrupta");
+  });
+
+  it("queda para 21% do patamar não dispara; para 20% dispara", () => {
+    expect(fired(classify(series([...base(10), 1000, 1000, 1000, 210, ...base(8)])), "abrupt_drop")).toBe(false);
+    expect(fired(classify(series([...base(10), 1000, 1000, 1000, 200, ...base(8)])), "abrupt_drop")).toBe(true);
+  });
+
+  it("patamar de 2 horas ou canal pequeno (abaixo de 200 views) não dispara", () => {
+    expect(fired(classify(series([...base(10), 1000, 1000, 50, ...base(8)])), "abrupt_drop")).toBe(false);
+    expect(fired(classify(series([...base(10, 20), 190, 195, 190, 10, ...base(8, 20)])), "abrupt_drop")).toBe(false);
+  });
+
+  it("decaimento orgânico, mesmo rápido, não é queda abrupta", () => {
+    expect(fired(classify(series([...base(10), 1000, 1000, 1000, 600, 360, 216, ...base(8)])), "abrupt_drop")).toBe(false);
+  });
+
+  it("queda junto de repetição mecânica continua suspeita", () => {
+    const verdict = classify(series([...base(10), ...Array(6).fill(900), 50, ...base(8)]));
+    expect(verdict.classification).toBe("suspicious");
+    expect(fired(verdict, "abrupt_drop")).toBe(true);
+  });
+});
