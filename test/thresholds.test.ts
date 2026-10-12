@@ -38,12 +38,21 @@ describe("fronteiras dos limiares", () => {
   });
 
   it("sustentação: 3 horas com 40% do pico é legítimo; 2 horas não sustentam", () => {
-    expect(classify(series([...base(10), 800, 2000, 800, ...base(10)])).classification).toBe("legitimate");
+    const tail = [600, 450, 340, 250, 190, 140, 105, 80, 60, 50];
+    expect(classify(series([...base(10), 800, 2000, 800, ...tail])).classification).toBe("legitimate");
     expect(fired(classify(series([...base(10), 300, 2000, 800, ...base(10)])), "sustained_peak")).toBe(false);
   });
 
   it("amostra: 12 horas são analisadas, 11 não", () => {
     expect(classify(series(base(12))).classification).toBe("legitimate");
     expect(classify(series(base(11))).classification).toBe("inconclusive");
+  });
+
+  it("pico comprado na última hora fica inconclusivo: ainda não dá para ver se some", () => {
+    const flat = Array(20).fill(0).map((_, i) => 40 + (i % 3));
+    const verdict = classify(series([...flat, 2000]));
+    expect(verdict.classification).toBe("inconclusive");
+    expect(verdict.reason).toContain("última hora");
+    expect(classify(series([...flat, 2000, 41])).classification).toBe("suspicious");
   });
 });

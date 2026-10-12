@@ -147,6 +147,9 @@ export function classify(input: Point[]): Verdict {
     fired: sustained,
     detail: `${nearPeakHours} hora(s) com 40% do pico ou mais; sustentação pede ${SUSTAINED_MIN_HOURS}`,
   };
+  // Pico na última hora não mostra a hora seguinte: não dá para saber se some
+  // (compra) ou se sustenta (viral começando).
+  const peakAtEnd = peakIndex === views.length - 1 && (strongSpike || weakSpike);
   const signals = gapSignal.fired
     ? [mechanical, isolated, weak, sustainedSignal, gapSignal]
     : [mechanical, isolated, weak, sustainedSignal];
@@ -155,6 +158,13 @@ export function classify(input: Point[]): Verdict {
     return {
       classification: "suspicious",
       reason: `Repetição mecânica: ${repeat.length} horas seguidas com exatamente ${repeat.value} views. Público humano não entrega o mesmo número inteiro hora após hora.`,
+      signals,
+    };
+  }
+  if (peakAtEnd) {
+    return {
+      classification: "inconclusive",
+      reason: `O maior pico (${peak} views) é a última hora da série. Sem a hora seguinte não dá para ver se ele some, como views compradas, ou se sustenta, como um vídeo estourando. Prefiro esperar mais dados a acusar.`,
       signals,
     };
   }
