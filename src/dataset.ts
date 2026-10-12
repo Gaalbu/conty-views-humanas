@@ -2,7 +2,15 @@ import { classify } from "./classify.ts";
 import type { Point } from "./classify.ts";
 
 export type Label = "legitimate" | "suspicious" | "borderline";
-export type Family = "organic" | "bought_spike" | "mechanical" | "borderline";
+export type Family =
+  | "organic"
+  | "bought_spike"
+  | "mechanical"
+  | "borderline"
+  | "live_end"
+  | "day_night"
+  | "small_creator"
+  | "slow_buy";
 export type Sample = { id: string; family: Family; label: Label; points: Point[] };
 
 export const DATASET_SEED = 7;
@@ -96,6 +104,40 @@ function borderline(rand: () => number): number[] {
   return breakRuns(views, rand);
 }
 
+// Live que termina: audiência alta por algumas horas e corte seco no fim.
+// Legítima; a queda abrupta sozinha deve ficar inconclusiva, nunca suspeita.
+function liveEnd(rand: () => number): number[] {
+  const base = between(rand, 30, 80);
+  const level = between(rand, 400, 1500);
+  const hours = 4 + Math.floor(rand() * 5);
+  const views = [...noisyBase(rand, base, 14)];
+  for (let i = 0; i < hours; i += 1) views.push(Math.round(level * between(rand, 0.9, 1.1)));
+  views.push(...noisyBase(rand, base, 48 - views.length));
+  return breakRuns(views, rand);
+}
+
+// Público em ciclo dia/noite: sobe de dia e cai de madrugada, por 3 dias.
+function dayNight(rand: () => number): number[] {
+  const base = between(rand, 80, 600);
+  const phase = rand() * 24;
+  const views = Array.from({ length: 72 }, (_, h) =>
+    Math.round(base * (1 + 0.6 * Math.sin(((h + phase) / 24) * 2 * Math.PI)) * between(rand, 0.9, 1.1)),
+  );
+  return breakRuns(views, rand);
+}
+
+// Criador pequeno: poucas views, ruído alto em termos relativos.
+function smallCreator(rand: () => number): number[] {
+  return breakRuns(Array.from({ length: 48 }, () => Math.floor(rand() * 15)), rand);
+}
+
+// Compra lenta: views compradas entregues com subida e decaimento parecidos com
+// os de um viral. É o que este classificador não pega, e entra na medição para
+// o README dizer isso com número.
+function slowBuy(rand: () => number): number[] {
+  return organic(rand);
+}
+
 export function generateDataset(seed = DATASET_SEED): Sample[] {
   const rand = mulberry32(seed);
   const families: Array<[Family, Label, number, (r: () => number) => number[]]> = [
@@ -103,6 +145,11 @@ export function generateDataset(seed = DATASET_SEED): Sample[] {
     ["bought_spike", "suspicious", 40, boughtSpike],
     ["mechanical", "suspicious", 40, mechanical],
     ["borderline", "borderline", 20, borderline],
+    // Famílias novas entram depois: as séries acima continuam idênticas.
+    ["live_end", "legitimate", 20, liveEnd],
+    ["day_night", "legitimate", 20, dayNight],
+    ["small_creator", "legitimate", 20, smallCreator],
+    ["slow_buy", "suspicious", 20, slowBuy],
   ];
   const samples: Sample[] = [];
   for (const [family, label, count, make] of families) {
@@ -120,4 +167,54 @@ export function falsePositiveRate(samples: Sample[], classifier = classify): num
   if (legitimate.length === 0) return 0;
   const flagged = legitimate.filter((s) => classifier(s.points).classification === "suspicious");
   return flagged.length / legitimate.length;
+}
+
+// Limite superior do intervalo de Clopper-Pearson (95%, bilateral) para k
+// sucessos em n: o maior p com P(X <= k) >= 2,5%. Com 0 em n, é 1 - 0,025^(1/n).
+export function upperBound95(k: number, n: number): number {
+  if (n === 0 || k >= n) return 1;
+  const cdf = (p: number) => {
+    let total = 0;
+    let term = Math.pow(1 - p, n);
+    for (let i = 0; i <= k; i += 1) {
+      total += term;
+      term *= ((n - i) / (i + 1)) * (p / (1 - p));
+    }
+    return total;
+  };
+  let low = k / n;
+  let high = 1;
+  for (let i = 0; i < 100; i += 1) {
+    const mid = (low + high) / 2;
+    if (cdf(mid) > 0.025) low = mid;
+    else high = mid;
+  }
+  return low;
+}
+
+// O bloco que `npm run dataset` imprime e que o README repete entre marcadores.
+export function reportLines(samples: Sample[], classifier = classify): string[] {
+  const order: string[] = [];
+  const rows = new Map<string, { label: Label; counts: Record<string, number> }>();
+  for (const sample of samples) {
+    if (!rows.has(sample.family)) {
+      order.push(sample.family);
+      rows.set(sample.family, { label: sample.label, counts: { legitimate: 0, suspicious: 0, inconclusive: 0 } });
+    }
+    rows.get(sample.family)!.counts[classifier(sample.points).classification] += 1;
+  }
+  const legitimate = samples.filter((s) => s.label === "legitimate");
+  const suspicious = samples.filter((s) => s.label === "suspicious");
+  const flagged = legitimate.filter((s) => classifier(s.points).classification === "suspicious").length;
+  const caught = suspicious.filter((s) => classifier(s.points).classification === "suspicious").length;
+  return [
+    `Séries: ${samples.length} (semente ${DATASET_SEED}), gravadas em dataset/views.json`,
+    ...order.map((family) => {
+      const row = rows.get(family)!;
+      return `${family} (${row.label}): legitimate ${row.counts.legitimate}, suspicious ${row.counts.suspicious}, inconclusive ${row.counts.inconclusive}`;
+    }),
+    `Falso positivo no dataset: ${falsePositiveRate(samples, classifier).toFixed(4)}`,
+    `Limite superior de 95% do falso positivo: ${upperBound95(flagged, legitimate.length).toFixed(4)} (${flagged} de ${legitimate.length} legítimas acusadas)`,
+    `Acerto nas suspeitas: ${(caught / suspicious.length).toFixed(4)} (${caught} de ${suspicious.length})`,
+  ];
 }
