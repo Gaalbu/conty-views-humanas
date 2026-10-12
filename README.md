@@ -23,9 +23,27 @@ Pico orgânico sustentado (regra 7) e pico de uma hora (regra 4) nunca caem na m
 
 ## O que isto não pega
 
-- Compra lenta, espalhada em várias horas, com decaimento parecido com o orgânico.
+- Compra lenta, espalhada em várias horas, com decaimento parecido com o orgânico. Isso está medido: a família `slow_buy` do dataset passa inteira como `legitimate`, e é por ela que o acerto nas suspeitas fica em 80%.
 - Volume baixo: um pico comprado abaixo de 1000 views fica `inconclusive`, não `suspicious`.
 - Ruído somado em cima de uma curva orgânica: views compradas que seguem a forma do público real.
+- Queda abrupta sozinha não acusa: fim de live (família `live_end`) e compra que para de uma vez têm o mesmo desenho, então os dois ficam `inconclusive`.
+
+## Critérios do enunciado → testes
+
+| Critério ou entrega | Teste |
+| --- | --- |
+| Motivo legível sem conhecer o código | `uma série de pico comprado é suspicious e o motivo cita o pico`, `…o motivo cita repetição` |
+| Taxa do README sai do comando | `a taxa de falso positivo medida é a mesma linha do README`, `o bloco do README é a saída de npm run dataset` |
+| Pico orgânico e pico comprado em baldes diferentes | `a orgânica que estourou e a comprada não caem na mesma classificação` |
+| Documenta o que não detecta | família `slow_buy` e `compra lenta com forma de viral passa despercebida, como o README declara` |
+| Caso em que prefere não acusar | `o caso limítrofe é inconclusive`, `fim de live, com queda abrupta, nunca é acusado`, `pico comprado na última hora fica inconclusivo` |
+| Dataset reproduzível | `duas gerações com a semente 7 produzem o mesmo JSON`, hash das 220 séries originais |
+
+## Decisões que eu deixaria diferentes com mais tempo
+
+- **Limiares calibrados.** Os limiares vieram do plano e passam no dataset, mas não foram escolhidos por calibração numa partição separada; com mais tempo, calibraria numa partição e mediria na outra.
+- **Ritmo do público.** O classificador não usa o ciclo dia/noite; um lote comprado de madrugada num canal de público diurno é um sinal que ele ignora.
+- **Compra lenta.** Pegar `slow_buy` exige olhar outra coisa além da forma da curva (retenção, origem do tráfego), que esta API não recebe.
 
 ## Como rodar
 
@@ -110,7 +128,7 @@ Os três casos listados em "O que isto não pega", sazonalidade por dia da seman
 
 Comece por `src/classify.ts` e pela saída de `npm run dataset`. A classificação é uma sequência de regras legíveis, e cada resposta traz o motivo em português e os sinais que dispararam ou não. A escolha central é não punir vídeo que estourou: pico que se sustenta por 3 horas ou mais com 40% do topo é `legitimate`, pico de uma hora com 20 vezes a mediana e mais de 1000 views é `suspicious`, e o pico isolado que fica abaixo desse limiar volta `inconclusive` em vez de acusar. Amostra com menos de 12 horas também é `inconclusive`. A taxa de falso positivo do README não foi escrita à mão: é a linha que `npm run dataset` imprime sobre 300 séries geradas com semente 7, e um teste compara a linha com a taxa recalculada.
 
-Testes: `npm test` com 37 passando, `npm run typecheck` sem erro. O exemplo deste README é o request de um teste.
+Testes: `npm test` com 43 passando, `npm run typecheck` sem erro. O exemplo deste README é o request de um teste.
 
 Ficou de fora: compra lenta com decaimento orgânico, volume baixo e ruído sobre curva orgânica.
 
