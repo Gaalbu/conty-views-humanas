@@ -133,6 +133,18 @@ function findAbruptDrop(views: number[]): { from: number; level: number; after: 
   return null;
 }
 
+function abruptDropSignal(points: Point[], views: number[]) {
+  const drop = findAbruptDrop(views);
+  const signal: Signal = {
+    name: "abrupt_drop",
+    fired: drop !== null,
+    detail: drop
+      ? `${DROP_PLATEAU_HOURS} horas com ${drop.level}+ views caem para ${drop.after} em ${points[drop.from]!.hour}`
+      : `nenhum patamar de ${DROP_PLATEAU_HOURS} horas que despenque para ${DROP_MAX_SHARE * 100}% de uma hora para a outra`,
+  };
+  return { drop, signal };
+}
+
 // Classificação explicável, sem modelo opaco. As regras rodam nesta ordem:
 // amostra curta, repetição mecânica, pico isolado, pico fraco, sustentação.
 // Na dúvida, não acusa: falso positivo pune criador cujo vídeo estourou de verdade.
@@ -168,14 +180,7 @@ export function classify(input: Point[]): Verdict {
   // Pico na última hora não mostra a hora seguinte: não dá para saber se some
   // (compra) ou se sustenta (viral começando).
   const peakAtEnd = peakIndex === views.length - 1 && (strongSpike || weakSpike);
-  const drop = findAbruptDrop(views);
-  const dropSignal: Signal = {
-    name: "abrupt_drop",
-    fired: drop !== null,
-    detail: drop
-      ? `${DROP_PLATEAU_HOURS} horas com ${drop.level}+ views caem para ${drop.after} em ${points[drop.from]!.hour}`
-      : `nenhum patamar de ${DROP_PLATEAU_HOURS} horas que despenque para ${DROP_MAX_SHARE * 100}% de uma hora para a outra`,
-  };
+  const { drop, signal: dropSignal } = abruptDropSignal(points, views);
   const signals = gapSignal.fired
     ? [mechanical, isolated, weak, sustainedSignal, dropSignal, gapSignal]
     : [mechanical, isolated, weak, sustainedSignal, dropSignal];
